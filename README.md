@@ -2,7 +2,7 @@
 
 ## 视频演示
 
-<video src="C:\Users\Administrator\Desktop\AI-Note-Assistant\vedio\QQ2025721-195445.mp4"></video>
+<video src="vedio\QQ2025721-195445.mp4"></video>
 
 ## Quick Start
 
