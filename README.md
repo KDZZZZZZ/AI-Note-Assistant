@@ -1,8 +1,9 @@
 # AI-Note-Assistant
 
-## 视频演示
+## 效果图
 
-<video src="vedio\QQ2025721-195445.mp4"></video>
+![fb6e6abf-e615-4c43-908b-5b0c58fae958](C:\Users\ADMINI~1\AppData\Local\Temp\fb6e6abf-e615-4c43-908b-5b0c58fae958.png)
+
 
 ## Quick Start
 
