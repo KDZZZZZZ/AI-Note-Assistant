@@ -2,7 +2,7 @@
 
 ## 效果图
 
-![fb6e6abf-e615-4c43-908b-5b0c58fae958](C:\Users\ADMINI~1\AppData\Local\Temp\fb6e6abf-e615-4c43-908b-5b0c58fae958.png)
+![fb6e6abf-e615-4c43-908b-5b0c58fae958](vedio\fb6e6abf-e615-4c43-908b-5b0c58fae958.png)
 
 
 ## Quick Start
