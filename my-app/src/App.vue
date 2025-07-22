@@ -4,7 +4,7 @@
     <div class="panel-content">
       <div class="llm-message" v-for="(message, index) in chatHistory" :key="index">
         <div class="message-status">{{ message.status || '✅ 已生成回复' }}</div>
-        <div class="message-content" v-html="renderMarkdown(message.summary || message.content || message)"></div>
+        <div class="message-content" v-html="renderMarkdown(message.summary || message.content || '')"></div>
       </div>
       <div class="llm-message" v-if="chatHistory.length === 0">
         <div class="message-status">… 等待中</div>
@@ -39,7 +39,7 @@
   <div class="panel">
     <div class="panel-header">📝 研究笔记</div>
     <div class="panel-content">
-        <article class="markdown-body" v-html="mdHtml"></article> 
+        <article class="markdown-body" v-html="renderMarkdown(mdHtml)"></article> 
     </div>
   </div>
 
@@ -62,13 +62,50 @@
  <script setup> 
  import { ref, onMounted, nextTick } from 'vue'
  import axios from 'axios' 
- import { marked } from 'marked' 
- import markedKatex from 'marked-katex-extension' 
+ import { Marked } from 'marked' 
+ import katex from 'katex'
+ import 'katex/dist/katex.min.css'
  import * as pdfjsLib from 'pdfjs-dist'
 
  /* ---------- 1. pdf.js 版本对齐 ---------- */ 
  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs' 
- marked.use(markedKatex({ throwOnError: false }))
+ 
+ const marked = new Marked({ gfm: true })
+
+ const renderMarkdown = (text) => {
+   if (!text) return ''
+
+   const mathStore = {};
+   let mathIndex = 0;
+
+   const replaceMath = (match, math, displayMode) => {
+     const placeholder = `<!--KLP:${displayMode ? 'D' : 'I'}:${mathIndex}-->`;
+     mathStore[mathIndex] = { math, displayMode };
+     mathIndex++;
+     return placeholder;
+   };
+
+   let processedText = text.replace(/\$\$([\s\S]+?)\$\$/g, (match, math) => replaceMath(match, math, true));
+   processedText = processedText.replace(/\$((?:[^\$]|\\\$)+?)\$/g, (match, math) => replaceMath(match, math, false));
+
+   let html = marked.parse(processedText);
+
+   for (const [index, { math, displayMode }] of Object.entries(mathStore)) {
+     try {
+       const renderedMath = katex.renderToString(math, {
+         displayMode,
+         throwOnError: false,
+         output: 'html',
+       });
+       const placeholder = `<!--KLP:${displayMode ? 'D' : 'I'}:${index}-->`;
+       html = html.replace(placeholder, renderedMath);
+     } catch (error) {
+       console.error('KaTeX render error:', error);
+     }
+   }
+
+   return html;
+ };
  
  /* ---------- 2. 响应式数据 ---------- */ 
  const inputText  = ref('') 
@@ -262,16 +299,7 @@ const isLoading = ref(false)  // 加载状态
   }
 } 
  
- /* ---------- 4. Markdown渲染函数 ---------- */
-function renderMarkdown(text) {
-  if (!text) return '';
-  try {
-    return marked(text);
-  } catch (error) {
-    console.error('Markdown渲染失败:', error);
-    return text; // 渲染失败时返回原文本
-  }
-}
+ 
 
 /* ---------- 5. 加载 Markdown ---------- */
 async function loadMarkdown() {
@@ -283,11 +311,11 @@ async function loadMarkdown() {
         'Cache-Control': 'no-cache',
       },
     });
-    mdHtml.value = marked.parse(response.data);
+    mdHtml.value = response.data; // 直接将原始内容赋给mdHtml
     await nextTick();
   } catch (error) {
     console.error('加载Markdown文件失败:', error);
-    mdHtml.value = marked.parse('# 加载失败\n无法加载Markdown文件，请检查文件路径。');
+    mdHtml.value = '# 加载失败\n无法加载Markdown文件，请检查文件路径。';
   }
 }
 
@@ -374,7 +402,6 @@ async function exportMd() {
     alert('导出失败，请检查网络。');
   }
 }
-
 async function clearMd() {
   if (confirm('确定要清空所有Markdown内容吗？此操作不可恢复。')) {
     try {
