@@ -2,7 +2,7 @@
 
 ## 效果图
 
-![example](img\example.png)
+![example](img/example.png)
 
 
 
