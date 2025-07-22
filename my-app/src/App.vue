@@ -1,102 +1,181 @@
-<template> 
-   <div class="wrapper"> 
-     <!-- 1. 左栏：实时文本 --> 
-     <aside class="left"> 
-        <pre class="chat-response">{{ chatResponse || 'Kimi 的回复将显示在这里…' }}</pre> 
-     </aside> 
- 
-     <!-- 2. 中栏：整份 PDF --> 
-     <main class="center" ref="centerEl" @dragover.prevent @drop.prevent="handleFileDrop"> 
-             <div v-if="!pdfLoaded" class="drop-zone">
+<template>
+  <div class="panel">
+    <div class="panel-header">💬 AI 助手</div>
+    <div class="panel-content">
+      <div class="llm-message" v-for="(message, index) in chatHistory" :key="index">
+        <div class="message-status">{{ message.status || '✅ 已生成回复' }}</div>
+        <div class="message-content" v-html="renderMarkdown(message.summary || message.content || message)"></div>
+      </div>
+      <div class="llm-message" v-if="chatHistory.length === 0">
+        <div class="message-status">… 等待中</div>
+        <div class="message-content">Kimi 的回复将显示在这里…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="resize-handle"></div>
+
+  <div class="panel">
+    <div class="panel-header">📄 论文阅读</div>
+    <div class="panel-content pdf-viewer" ref="centerEl" @dragover.prevent @drop.prevent="handleFileDrop">
+      <div v-if="!pdfLoaded" class="drop-zone">
         <p>将 PDF 文件拖放到此处，或</p>
         <button @click="openFileDialog" class="upload-button">选择文件</button>
         <input type="file" ref="fileInput" @change="handleFileSelect" accept=".pdf" hidden>
       </div>
-      <div v-else>
+      <div v-else class="pdf-page-container">
         <canvas 
           v-for="page in pdfPages" 
           :key="page.pageNum" 
-          class="page" 
+          class="pdf-page" 
           :ref="el => (page.el = el)" 
         /> 
       </div>
-     </main> 
- 
-     <!-- 3. 右栏：Markdown --> 
-     <aside class="right"> 
-       <article class="markdown-body" v-html="mdHtml"></article> 
-     </aside> 
-    <div class="float-input-wrapper">
-      <textarea class="float-input" v-model="inputText" placeholder="在这里输入文字…" @keydown.enter.prevent="sendMessage"></textarea>
-      <button @click="sendMessage" class="send-button">发送</button>
     </div>
+  </div>
+
+  <div class="resize-handle"></div>
+
+  <div class="panel">
+    <div class="panel-header">📝 研究笔记</div>
+    <div class="panel-content">
+        <article class="markdown-body" v-html="mdHtml"></article> 
+    </div>
+  </div>
+
+  <div class="floating-input">
+    <input v-model="inputText" placeholder="输入问题或指令…" @keydown.enter.prevent="sendMessage" :disabled="isLoading">
+    <button @click="sendMessage" :disabled="isLoading" :class="{ 'loading': isLoading }">
+      <span v-if="!isLoading">➤</span>
+      <span v-else class="spinner">⟳</span>
+    </button>
+  </div>
+
     <div class="right-controls">
       <button @click="importMd">导入MD</button>
       <button @click="exportMd">导出MD</button>
       <button @click="clearMd">清空MD</button>
       <input type="file" ref="mdInput" @change="handleMdSelect" accept=".md" hidden>
     </div>
-   </div> 
- </template> 
+</template> 
  
  <script setup> 
  import { ref, onMounted, nextTick } from 'vue'
  import axios from 'axios' 
  import { marked } from 'marked' 
+ import markedKatex from 'marked-katex-extension' 
  import * as pdfjsLib from 'pdfjs-dist'
 
  /* ---------- 1. pdf.js 版本对齐 ---------- */ 
- pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
+ pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs' 
+ marked.use(markedKatex({ throwOnError: false }))
  
  /* ---------- 2. 响应式数据 ---------- */ 
  const inputText  = ref('') 
- const pdfPages   = ref([])   // { pageNum, el }
+ const pdfPages   = ref([])   // { pageNum, el}
  const pdfLoaded  = ref(false) 
  const mdHtml     = ref('')
  const chatResponse = ref('') 
+ const chatHistory = ref([])  // 存储聊天历史记录
+const isLoading = ref(false)  // 加载状态
  const centerEl = ref(null)
  
- /* ---------- 3. 加载整份 PDF ---------- */
+ /* ---------- 3. PDF渲染相关 ---------- */
+ let currentPdf = null; // 保存当前PDF实例
+
+ // 计算最佳渲染参数
+ function calculateRenderParams() {
+   const containerWidth = centerEl.value?.clientWidth || 800;
+   const pixelRatio = window.devicePixelRatio || 1;
+   
+   return {
+     containerWidth: containerWidth - 40, // 减去padding
+     pixelRatio,
+     qualityMultiplier: Math.max(2.5, pixelRatio * 2) // 提高清晰度倍数
+   };
+ }
+
+ // 渲染单个PDF页面
+ async function renderPdfPage(page, canvas, params) {
+   const viewport = page.getViewport({ scale: 1 });
+   const scale = params.containerWidth / viewport.width;
+   
+   // 计算高质量渲染的缩放比例
+   const renderScale = scale * params.qualityMultiplier;
+   const renderViewport = page.getViewport({ scale: renderScale });
+   
+   // 设置canvas实际尺寸（高分辨率）
+   canvas.width = renderViewport.width;
+   canvas.height = renderViewport.height;
+   
+   // 设置canvas显示尺寸（适应容器）
+   canvas.style.width = `${scale * viewport.width}px`;
+   canvas.style.height = `${scale * viewport.height}px`;
+   canvas.style.maxWidth = '100%';
+   canvas.style.display = 'block';
+   canvas.style.margin = '0 auto';
+   
+   const context = canvas.getContext('2d');
+   context.clearRect(0, 0, canvas.width, canvas.height);
+   
+   const renderContext = {
+     canvasContext: context,
+     viewport: renderViewport,
+   };
+   
+   await page.render(renderContext).promise;
+ }
+
+ // 重新渲染所有PDF页面
+ async function reRenderPdf() {
+   if (!currentPdf || !pdfLoaded.value) return;
+   
+   const params = calculateRenderParams();
+   
+   for (const pageObj of pdfPages.value) {
+     if (!pageObj.el) continue;
+     try {
+       const page = await currentPdf.getPage(pageObj.pageNum);
+       await renderPdfPage(page, pageObj.el, params);
+     } catch (error) {
+       console.error(`渲染第${pageObj.pageNum}页失败:`, error);
+     }
+   }
+ }
+
+ // 主PDF渲染函数
  async function renderPdf(arrayBuffer) {
    try {
-     // 验证arrayBuffer
      if (!arrayBuffer || arrayBuffer.byteLength === 0) {
        throw new Error('PDF文件为空或无效');
      }
      
      const pdfLoadingTask = pdfjsLib.getDocument({
        data: arrayBuffer,
-       verbosity: 0 // 减少控制台输出
+       verbosity: 0
      });
-     const pdf = await pdfLoadingTask.promise;
-   const containerWidth = centerEl.value.clientWidth;
+     
+     currentPdf = await pdfLoadingTask.promise;
+     const params = calculateRenderParams();
 
-   pdfPages.value = Array.from({ length: pdf.numPages }, (_, i) => ({
-     pageNum: i + 1,
-     el: null,
-   }));
+     pdfPages.value = Array.from({ length: currentPdf.numPages }, (_, i) => ({
+       pageNum: i + 1,
+       el: null,
+     }));
 
-   await nextTick();
+     await nextTick();
 
-   for (const pageObj of pdfPages.value) {
-     if (!pageObj.el) continue;
-     const page = await pdf.getPage(pageObj.pageNum);
-     const viewport = page.getViewport({ scale: 1 });
-     const scale = (containerWidth - 20) / viewport.width; // 减去 padding
-     const scaledViewport = page.getViewport({ scale });
-
-     pageObj.el.height = scaledViewport.height;
-     pageObj.el.width = scaledViewport.width;
-
-     const renderContext = {
-       canvasContext: pageObj.el.getContext('2d'),
-       viewport: scaledViewport,
-     };
-     await page.render(renderContext).promise;
-   }
+     // 渲染所有页面
+     for (const pageObj of pdfPages.value) {
+       if (!pageObj.el) continue;
+       const page = await currentPdf.getPage(pageObj.pageNum);
+       await renderPdfPage(page, pageObj.el, params);
+     }
+     
    } catch (error) {
      console.error('PDF渲染失败:', error);
      pdfLoaded.value = false;
+     currentPdf = null;
      throw new Error(`PDF渲染失败: ${error.message}`);
    }
  }
@@ -183,8 +262,19 @@
   }
 } 
  
- /* ---------- 4. 加载 Markdown ---------- */ 
- async function loadMarkdown() {
+ /* ---------- 4. Markdown渲染函数 ---------- */
+function renderMarkdown(text) {
+  if (!text) return '';
+  try {
+    return marked(text);
+  } catch (error) {
+    console.error('Markdown渲染失败:', error);
+    return text; // 渲染失败时返回原文本
+  }
+}
+
+/* ---------- 5. 加载 Markdown ---------- */
+async function loadMarkdown() {
   try {
     const response = await axios.get('/note.md', {
       responseType: 'text',
@@ -194,6 +284,7 @@
       },
     });
     mdHtml.value = marked.parse(response.data);
+    await nextTick();
   } catch (error) {
     console.error('加载Markdown文件失败:', error);
     mdHtml.value = marked.parse('# 加载失败\n无法加载Markdown文件，请检查文件路径。');
@@ -204,8 +295,22 @@ onMounted(() => {
   // 初始加载
   loadMarkdown();
 
+  // 添加窗口大小变化监听器
+  let resizeTimeout;
+  const handleResize = () => {
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(() => {
+      if (pdfLoaded.value) {
+        reRenderPdf();
+      }
+    }, 300); // 防抖，300ms后重新渲染
+  };
+  
+  window.addEventListener('resize', handleResize);
+
   // 添加页面关闭前的清理操作
   window.addEventListener('beforeunload', () => {
+    window.removeEventListener('resize', handleResize);
     // 使用 navigator.sendBeacon 发送一个POST请求
     // 这是一个可靠的方式，可以在页面卸载时发送数据
     navigator.sendBeacon('/api/cleanup', new Blob());
@@ -241,12 +346,12 @@ async function handleMdSelect(event) {
 
 async function exportMd() {
   try {
-    const response = await axios.get('/file.md', { responseType: 'text' });
+    const response = await axios.get('/api/export_md', { responseType: 'blob' });
     const blob = new Blob([response.data], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'exported_note.md';
+    a.download = 'note.md';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -269,10 +374,14 @@ async function clearMd() {
   }
 }
 
-/* ---------- 5. 发送消息到后端 ---------- */
-async function sendMessage() {
-  if (!inputText.value.trim()) return;
 
+
+/* ---------- 6. 发送消息到后端 ---------- */
+async function sendMessage() {
+  if (!inputText.value.trim() || isLoading.value) return;
+
+  isLoading.value = true; // 开始加载
+  
   try {
     const rawText = inputText.value.trim(); // 获取原始字符串
 
@@ -283,37 +392,58 @@ async function sendMessage() {
       }
     });
 
-    if (res.data && res.data.status === 'updated') {
-      chatResponse.value = res.data.reply;
+    // 解析响应数据
+    let messageData;
+    if (typeof res.data === 'string') {
+      try {
+        // 尝试解析JSON字符串
+        messageData = JSON.parse(res.data);
+      } catch {
+        // 如果不是JSON，作为普通文本处理
+        messageData = { content: res.data, status: '✅ 已生成回复' };
+      }
+    } else if (typeof res.data === 'object') {
+      // 如果已经是对象
+      messageData = res.data;
+    } else {
+      messageData = { content: String(res.data), status: '✅ 已生成回复' };
+    }
+
+    // 添加到历史记录
+    chatHistory.value.push(messageData);
+    
+    // 如果有status为updated，刷新markdown
+    if (messageData.status === 'updated') {
       loadMarkdown(); // 手动刷新
     }
 
-    chatResponse.value = res.data; // 直接使用字符串响应
     inputText.value = ''; // 清空输入框
 
   } catch (error) {
     console.error('通信错误:', error);
 
     // 错误处理
+    let errorMessage;
     if (error.response) {
-      // 可以解析后端返回的错误信息，但注意响应类型可能是文本或JSON
-      let errorMessage;
       if (typeof error.response.data === 'string') {
         errorMessage = error.response.data;
       } else {
         try {
-          // 如果错误响应是JSON（有些后端可能会返回JSON错误）
           errorMessage = error.response.data.detail || JSON.stringify(error.response.data);
         } catch {
           errorMessage = `后端错误：${error.response.status} ${error.response.statusText}`;
         }
       }
-      chatResponse.value = errorMessage;
     } else if (error.request) {
-      chatResponse.value = '网络错误：请求已发送但未收到响应';
+      errorMessage = '网络错误：请求已发送但未收到响应';
     } else {
-      chatResponse.value = '客户端错误：' + error.message;
+      errorMessage = '客户端错误：' + error.message;
     }
+    
+    // 将错误信息也添加到历史记录
+    chatHistory.value.push({ content: errorMessage, status: '❌ 错误' });
+  } finally {
+    isLoading.value = false; // 结束加载
   }
 }
  </script> 
@@ -349,9 +479,9 @@ async function sendMessage() {
    display: none;              /* Chrome / Edge / Safari */ 
  } 
  
- .left  { width: 30%; background: #2c3e50; color: #ecf0f1; padding: 20px; }
- .center { width: 40%; background: #ecf0f1; padding: 10px; }
- .right  { width: 30%; background: #ffffff; padding: 20px; position: relative; }
+ .left  { width: 30%; padding: 20px; }
+ .center { width: 40%; padding: 10px; }
+ .right  { width: 30%; padding: 20px; position: relative; }
 
 .right-controls {
   position: absolute;
@@ -409,6 +539,22 @@ async function sendMessage() {
   background: #fff;
 }
 
+.pdf-page {
+  margin-bottom: 10px;
+  border: 1px solid #ddd;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.pdf-page-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+}
+
 .float-input-wrapper {
   position: fixed;
   bottom: 20px;
@@ -445,5 +591,71 @@ async function sendMessage() {
   word-wrap: break-word;
   height: calc(100vh - 120px); /* Adjust based on your layout */
   overflow-y: auto;
+}
+
+/* 发送按钮加载状态样式 */
+.floating-input button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.floating-input button.loading {
+  background: #6366f1;
+}
+
+.spinner {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.floating-input input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 左栏消息Markdown样式 */
+.message-content {
+  line-height: 1.6;
+}
+
+.message-content h1, .message-content h2, .message-content h3 {
+  margin: 0.5em 0;
+  color: #333;
+}
+
+.message-content p {
+  margin: 0.5em 0;
+}
+
+.message-content code {
+  background: #f5f5f5;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+}
+
+.message-content pre {
+  background: #f5f5f5;
+  padding: 10px;
+  border-radius: 5px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+
+.message-content ul, .message-content ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.message-content blockquote {
+  border-left: 4px solid #ddd;
+  margin: 0.5em 0;
+  padding-left: 1em;
+  color: #666;
 }
  </style>

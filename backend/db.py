@@ -20,8 +20,11 @@ def init_db(md_path: str = "../my-app/public/note.md") -> None:
                 conn.execute("INSERT INTO lines(hash, content) VALUES(?, ?)", (h, content))
         conn.commit()
 def build_full_context() -> str:
+    all_lines = Path("../my-app/public/note.md").read_text(encoding="utf-8").splitlines()
+    # 只取最后200行
+    last_200_lines = all_lines[-200:] if len(all_lines) > 200 else all_lines
     lines = [f"{i+1}:{sha8(ln)}:{ln.rstrip()}"
-             for i, ln in enumerate(Path("../my-app/public/note.md").read_text(encoding="utf-8").splitlines())]
+             for i, ln in enumerate(last_200_lines)]
     return "\n".join(lines)
 
 def sha8(s: str) -> str:

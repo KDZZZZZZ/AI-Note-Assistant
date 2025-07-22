@@ -6,7 +6,8 @@ from utils import export_md, safe_write, should_ignore_event, describe_patch
 from db import init_db, build_full_context, get_all_rows
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, Request, WebSocket
+from fastapi import FastAPI, UploadFile, File, Request, WebSocket, Response
+from fastapi.responses import FileResponse
 from pathlib import Path
 import asyncio
 
@@ -51,7 +52,7 @@ def init():
         "role": "system",
         "content": """
         你是 Markdown 笔记总结大师，能调用 insert_line / delete_line / update_line。
-        如果用户没有提到要写入在笔记中，你要自主判断是否对笔记进行修改，你的任务是从文档和与用户的交互中提取信息，将有价值的精华记录在笔记当中。
+        如果用户没有提到要写入在笔记中，你要自主判断是否对笔记进行修改，你的任务是从文档和与用户的交互中提取信息，将有价值的精华记录在笔记当中。一切对笔记的修改都由你完成，用户无法手动修改。
         下面给出**完整 Markdown**（每行格式：`行号:hash:内容`），请根据用户指令**自主决定修改哪些行**，并返回 JSON Patch：
 
         [{"id":"行号","old_hash":"原摘要","new":"新内容"}]
