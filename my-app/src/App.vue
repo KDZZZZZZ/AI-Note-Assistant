@@ -346,15 +346,28 @@ async function handleMdSelect(event) {
 
 async function exportMd() {
   try {
-    const response = await axios.get('/api/export_md', { responseType: 'blob' });
+    // 直接使用axios下载文件
+    const response = await axios.get('/api/export_md', { 
+      responseType: 'blob',
+      // 避免浏览器缓存
+      headers: {
+        'Cache-Control': 'no-cache',
+      } 
+    });
+    
+    // 创建Blob对象并生成下载链接
     const blob = new Blob([response.data], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
+    
+    // 创建临时下载链接并触发下载
     const a = document.createElement('a');
     a.href = url;
     a.download = 'note.md';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    
+    // 释放URL对象
     URL.revokeObjectURL(url);
   } catch (error) {
     console.error('导出Markdown文件失败:', error);
