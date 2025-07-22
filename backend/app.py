@@ -66,6 +66,11 @@ def init():
 )
     init_db()
 
+@app.get("/export_md")
+async def api_export_md():
+    export_md()
+    return FileResponse(Path("../my-app/public/note.md"), filename="note.md")
+
 @app.post("/upload_files")
 def upload_files():
 
